@@ -1,0 +1,28 @@
+{
+  "name": "marlin",
+  "version": "1.0.0",
+  "description": "A Lightweight file based CMS",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OptimalBits/marlin.git"
+  },
+  "keywords": [
+    "cms"
+  ],
+  "author": "Manuel Astudillo",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/OptimalBits/marlin/issues"
+  },
+  "homepage": "https://github.com/OptimalBits/marlin#readme",
+  "dependencies": {
+    "bluebird": "^3.2.2",
+    "lodash": "^4.3.0",
+    "mkdirp": "^0.5.1",
+    "mustache": "^2.2.1"
+  }
+}
