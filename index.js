@@ -23,7 +23,10 @@
  *
  *  partials/
  *  assets/
- *
+ *    css/
+ *      about/
+ *    img/
+ *      pricing/
  */
 
 /*
@@ -34,17 +37,27 @@
 
 var Promise = require('bluebird');
 var _ = require('lodash');
-var mkdirp = Promise.promisify(require('mkdirp'));
-var fs = require('fs');
+var fs = Promise.promisifyAll(require('fs-extra'));
 var path = require('path');
-var mustache = require('mustache');
+var marked = require('marked');
+var mime = require('mime');
 
-Promise.promisifyAll(fs);
+Promise.config({
+  longStackTraces: true
+})
 
-function build(src, dst) {
+var engines = {};
+
+/**
+ * Builds a site into a static site structure that can be served
+ * by any static web server.
+ *
+ */
+module.exports.build = function build(src, dst) {
   return createRoutes(path.join(src, 'home')).then(function (routes) {
 	   return renderRoutes(
       routes,
+      path.join(src, 'commons'),
       path.join(src, 'templates'),
       path.join(src, 'partials'),
       dst, {
@@ -53,9 +66,18 @@ function build(src, dst) {
   });
 }
 
-build('test', 'test/build').then(function (site) {
-  //console.log(site);
-});
+module.exports.register = function register( fn, partialsFn, exts, outputExt ) {
+  exts = _.isArray( exts ) ? exts : [exts];
+
+  _.each(exts, function(ext){
+    var mimeType = mime.lookup('dummy.'+ext);
+    engines[mimeType] = {
+      render: fn,
+      register: partialsFn,
+      ext: outputExt
+    };
+  });
+}
 
 function createRoutes(_path) {
   var routes = {};
@@ -68,8 +90,31 @@ function createRoutes(_path) {
           routes[filename] = children;
         });
       } else if (stat.isFile()) {
-        routes['__content'] = routes['__content'] ||  [];
-        routes['__content'].push(subpath);
+        switch(mime.lookup(subpath)){
+          case 'text/x-markdown':
+          case 'text/plain':
+          case 'application/json':
+            routes['__content'] = routes['__content'] ||  [];
+            routes['__content'].push(subpath);
+            break;
+          case 'text/css':
+          case 'text/less':
+          case 'text/x-scss':
+            routes['__css'] = routes['__css'] ||  [];
+            routes['__css'].push(subpath);
+	          break;
+          case 'image/png':
+          case 'image/jpeg':
+            routes['__img'] = routes['__img'] ||  [];
+            routes['__img'].push(subpath);
+	          break;
+          case 'application/javascript':
+            routes['__js'] = routes['__js'] ||  [];
+            routes['__js'].push(subpath);
+            break;
+          default:
+            console.log("marlin: warning: Invalid file:", subpath, mime.lookup(subpath));
+        }
       }
     });
   }).then(function () {
@@ -77,22 +122,35 @@ function createRoutes(_path) {
   });
 }
 
-// TODO: refactor loadFiles code
-function loadFiles(_path) {
-  var files = {};
-  return fs.readdirAsync(_path).map(function (filename) {
-    var subpath = path.join(_path, filename);
-    return fs.statAsync(subpath).then(function (stat) {
-      if (stat.isFile()) {
-	       return fs.readFileAsync(subpath, 'utf8').then(function (data) {
-          var templateName = filename.split('.')[0];
-          files[templateName] = data;
+// TODO: remove as global.
+var site = {};
+
+function renderRoutes(routes, commonsPath, templatesPath, partialsPath, destPath, opts) {
+  // Get languages list
+  var languages = ['en', 'se', 'es', 'de']; // TODO: convert into a function
+
+  return Promise
+    .join(loadFiles(commonsPath), loadFiles(templatesPath), loadFiles(partialsPath))
+    .spread(function (commons, templates, partials){
+
+      registerPartials(partials);
+
+      Promise.each(_.keys(commons), function(name){
+        // Hack we just take the first mimetype (we should instead merge all the types)
+        var mimeType = _.first(_.keys(commons[name]));
+        var data = {
+          content: commons[name][mimeType],
+          mimeType: mimeType
+        }
+        return readContentFile( data ).then(function(data){
+          site[name] = data;
         });
-      }
-    });
-  }).then(function(){
-    return files;
-  })
+      }).then(function(){
+        console.log("SITE:", site);
+      }).then(function(){
+        return buildRoute(routes, 'home', destPath, templates, partials, languages[0], opts);
+      });
+  });
 }
 
 /**
@@ -115,29 +173,69 @@ function loadFiles(_path) {
  */
 function buildRoute(route, name, destPath, templates, partials, lang, opts){
  	destPath = path.join(destPath, name);
-  return renderRoute(route, name, templates, partials, 'en', opts).then(function(index){
-    return mkdirp(destPath).then(function(){
-      return fs.writeFileAsync(path.join(destPath, 'index.html'), index);
-    }).then(function(){
-      return Promise.map(_.sortBy(_.filter(_.keys(route), notContent)), function (key){
-	       return buildRoute(route[key], key, destPath, templates, partials, lang, opts);
+
+  return renderRoute(route, name, templates, partials, 'en', opts).then(function(assets){
+    return fs.mkdirpAsync(destPath).then(function(){
+      var files = [];
+      if(assets.html){
+        //
+        // Render index.html
+        //
+        files.push(fs.writeFileAsync(path.join(destPath, 'index.html'), assets.html));
+      }
+      if(assets.css){
+        files.push(fs.writeFileAsync(path.join(destPath, name+'.css'), assets.css));
+      }
+      return Promise.all(files);
+    });
+  }).then(function(){
+      //
+      // Copy/Preprocess Assets (css, jpeg, etc).
+      //
+      var assets = [].concat(route.__img || [], route.__css || [], route.__js || []);
+      return Promise.map(assets, function(asset){
+        // var processor = getPreprocessor(asset);
+        return fs.copyAsync(asset, path.join(destPath, path.basename(asset)) );
       });
+
+  }).then(function(){
+    return Promise.map(_.sortBy(_.filter(_.keys(route), notContent)), function (key){
+	     return buildRoute(route[key], key, destPath, templates, partials, lang, opts);
     });
   });
 }
 
-function renderRoutes(routes, templatesPath, partialsPath, destPath, opts) {
-  // Get languages list
-  var languages = ['en', 'se', 'es', 'de']; // TODO: convert into a function
+function getPreprocessor( filename, destPath ){
+  var mimeType = mime.lookup(filename);
+  var fileDestPath = path.join(destPath, path.basename(filename));
 
-  return Promise.join(loadFiles(templatesPath), loadFiles(partialsPath)).spread(function (templates, partials){
-    return buildRoute(routes, 'home', destPath, templates, partials, languages[0], opts);
+  var engine = engines[mimeType];
+  if(engine){
+    return fs.readFileAsync( filename, 'utf8' ).then(function (data){
+      return engine.render( data );
+    }).then(function(data){
+      return fs.outputFileAsync(fileDestPath, data, 'utf8');
+    });
+  }else{
+    return fs.copyAsync(filename, fileDestPath);
+  }
+}
+
+function registerPartials(partials){
+  _.each(partials, function(partial, name){
+    _.each(partial, function( content, mimeType){
+      var engine = engines[mimeType];
+      if(engine){
+        engine.register && engine.register(name, content);
+      }else{
+        console.log('marlin: warning: missing template engine for type:', mimeType);
+      }
+    });
   });
 }
 
-
 function notContent(item){
-  return item !== '__content';
+  return ['__content', '__css', '__img', '__js'].indexOf(item) === -1;
 }
 
 function renderRoute(route, name, templates, partials, language, opts) {
@@ -151,13 +249,9 @@ function renderRoute(route, name, templates, partials, language, opts) {
     var components = path.basename(filename).split('.');
     var templateName = components[0];
     var lang = opts.defaultLanguage;
-    var ext;
 
     if (components.length === 3) {
       lang = components[1];
-      ext = components[2];
-    } else {
-      ext = components[1];
     }
 
     var template = templates[templateName];
@@ -165,12 +259,14 @@ function renderRoute(route, name, templates, partials, language, opts) {
       throw Error('Missing template: ' + templateName)
     }
 
-    if (lang === language && ext === 'md') {
+    var mimeType = mime.lookup(filename);
+
+    if (lang === language && mimeType === 'text/x-markdown') {
 	     files.push({
         filename: filename,
-	       template: template,
+	      template: template,
         lang: lang,
-        ext: ext
+        mimeType: mimeType
       })
     }
   });
@@ -188,14 +284,59 @@ function renderRoute(route, name, templates, partials, language, opts) {
      return Promise.resolve('');
   }
 
-  return fs.readFileAsync(contentFile.filename, 'utf8').then(function (data) {
-    _.extend(view, parseContent(data));
-  }).then(function () {
-	   return mustache.render(contentFile.template, view, partials);
+  return readContentFile( contentFile.filename ).then(function (view) {
+    var assets = {};
+    _.extend(view, site);
+
+    _.each(contentFile.template, function(content, mimeType){
+      var engine = engines[mimeType];
+
+      if(engine){
+        assets[engine.ext] = engine.render(content, view, partials);
+      }else{
+        console.log("marlin: warning: missing render engine for type:", mimeType);
+      }
+    });
+
+    return assets;
   });
 }
 
-function parseContent(content) {
+function readContentFile( filename ){
+  var dataPromise;
+  if(_.isObject(filename)){
+    dataPromise = Promise.resolve(filename);
+  }else{
+    dataPromise = fs.readFileAsync(filename, 'utf8').then(function (data) {
+      return {
+        content: data,
+        mimeType: mime.lookup(filename)
+      }
+    });
+  }
+
+  return dataPromise.then(function(data){
+    switch(data.mimeType){
+      case 'text/plain':
+        return parseContent( data.content, noPreprocess );
+      case 'text/x-markdown':
+        return parseContent( data.content, marked );
+      case 'application/json':
+        try{
+          return JSON.parse( data.content );
+        }catch(err){
+          console.log("marlin: error parsing content: ", filename);
+        }
+        break;
+    }
+  });
+}
+
+function noPreprocess(data){
+  return data;
+}
+
+function parseContent(content, preprocessor) {
 
   var properties = {};
   var re = /((.[^:\s])+):/g
@@ -215,12 +356,32 @@ function parseContent(content) {
 
   for (var j = 0; j < contentRanges.length; j++) {
     var end = j + 1 < contentRanges.length ? contentRanges[j + 1].start : lines.length;
-	   properties[contentRanges[j].property] = lines.slice(contentRanges[j].start, end);
+    var value = lines.slice(contentRanges[j].start, end).join();
+	  properties[contentRanges[j].property] = preprocessor(value);
   }
 
 	 return properties;
 }
 
-function createFile(dst, content){
+//
+// Load all the files in a given directory with proper mimetype mappings.
+//
+function loadFiles(_path) {
+  var files = {};
+  return fs.readdirAsync(_path).map(function (filename) {
+    var subpath = path.join(_path, filename);
+    return fs.statAsync(subpath).then(function (stat) {
+      if (stat.isFile()) {
+         return fs.readFileAsync(subpath, 'utf8').then(function (data) {
+          var templateName = filename.split('.')[0];
 
+          files[templateName] = files[templateName] || {};
+          files[templateName][mime.lookup(filename)] = data;
+
+        });
+      }
+    });
+  }).then(function(){
+    return files;
+  })
 }
