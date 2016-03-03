@@ -174,7 +174,7 @@ function renderRoutes(routes, commonsPath, templatesPath, partialsPath, destPath
 function buildRoute(route, name, destPath, templates, partials, lang, opts){
  	destPath = path.join(destPath, name);
 
-  return renderRoute(route, name, templates, partials, 'en', opts).then(function(assets){
+  return renderPage(route, name, templates, partials, 'en', opts).then(function(assets){
     return fs.mkdirpAsync(destPath).then(function(){
       var files = [];
       if(assets.html){
@@ -238,14 +238,13 @@ function notContent(item){
   return ['__content', '__css', '__img', '__js'].indexOf(item) === -1;
 }
 
-function renderRoute(route, name, templates, partials, language, opts) {
-  var view = {};
+function renderPage(page, name, templates, partials, language, opts) {
 
   //
   // load content file
   //
   var files = [];
-  _.each(route.__content, function (filename) {
+  _.each(page.__content, function (filename) {
     var components = path.basename(filename).split('.');
     var templateName = components[0];
     var lang = opts.defaultLanguage;
@@ -261,7 +260,9 @@ function renderRoute(route, name, templates, partials, language, opts) {
 
     var mimeType = mime.lookup(filename);
 
-    if (lang === language && mimeType === 'text/x-markdown') {
+    var supported = ['text/x-markdown', 'application/json', 'text/plain'];
+
+    if (lang === language && supported.indexOf(mimeType) !== -1  ) {
 	     files.push({
         filename: filename,
 	      template: template,
@@ -280,14 +281,13 @@ function renderRoute(route, name, templates, partials, language, opts) {
   }
 
   if (!contentFile) {
-     console.log('marlin: warning:', 'missing content file for route: ' + name);
+     console.log('marlin: warning:', 'missing content file for page: ' + name);
      return Promise.resolve('');
   }
 
   return readContentFile( contentFile.filename ).then(function (view) {
     var assets = {};
-    _.extend(view, site);
-
+    _.extend(view, site, {$page: name});
     _.each(contentFile.template, function(content, mimeType){
       var engine = engines[mimeType];
 
