@@ -21,10 +21,11 @@
   "homepage": "https://github.com/OptimalBits/marlin#readme",
   "dependencies": {
     "bluebird": "^3.2.2",
-    "fs-extra": "^0.26.5",
+    "fs-extra": "^9.0.1",
     "lodash": "^4.3.0",
     "marked": "^0.3.5",
     "mime": "^1.3.4",
-    "mustache": "^2.2.1"
+    "mustache": "^2.2.1",
+    "utimes": "^4.0.2"
   }
 }

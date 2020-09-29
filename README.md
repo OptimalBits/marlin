@@ -16,4 +16,13 @@ Or npm:
 npm install --save-dev marlin
 ```
 
+# Definitions
+
+## Content
+
+Content is the data that you show on the templates. It is usually stored as markdown, json or plain text.
+
+## Templates
+
+Templates are used to render the content into one or several views.
 
